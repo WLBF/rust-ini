@@ -44,6 +44,7 @@
 //! ```
 
 #[macro_use] extern crate log;
+extern crate encoding;
 
 pub use ini::Ini;
 pub mod ini;

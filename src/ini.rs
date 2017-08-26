@@ -27,14 +27,17 @@ use std::collections::hash_map::Entry;
 use std::fs::{OpenOptions, File};
 use std::ops::{Index, IndexMut};
 use std::char;
-use std::io::{self, Write, Read};
+use std::io::{self, Write, Read, Error as IoError, ErrorKind};
 use std::fmt::{self, Display};
 use std::path::Path;
-use std::str::Chars;
+use std::str::{self, Chars};
 use std::borrow::Borrow;
 use std::hash::Hash;
 use std::cmp::Eq;
 use std::error;
+
+use encoding::{Encoding, EncoderTrap, DecoderTrap};
+use encoding::all::UTF_16LE;
 
 #[derive(Debug, PartialEq, Copy, Clone)]
 pub enum EscapePolicy {
@@ -382,6 +385,26 @@ impl Ini {
         self.write_to_file_policy(filename, EscapePolicy::Basics)
     }
 
+    /// Write to file with utf-16le encoding
+    pub fn write_to_file_utf16le<P: AsRef<Path>>(&self, filename: P, with_bom: bool) -> io::Result<()> {
+        let mut file = OpenOptions::new()
+            .write(true)
+            .truncate(true)
+            .create(true)
+            .open(filename.as_ref())?;
+        let mut origin_buf = Vec::new();
+        let mut dest_buf = Vec::new();
+        self.write_to(&mut origin_buf)?;
+        let origin_str = str::from_utf8(&origin_buf).map_err(|e| IoError::new(ErrorKind::Other, e))?;
+        UTF_16LE.encode_to(&origin_str, EncoderTrap::Strict, &mut dest_buf)
+            .map_err(|e| IoError::new(ErrorKind::Other, e.into_owned()))?;
+        if with_bom {
+            dest_buf.insert(0, 0xFE);
+            dest_buf.insert(0, 0xFF);
+        }
+        file.write(&dest_buf).map(|_| ())
+    }
+
     /// Write to a file
     pub fn write_to_file_policy<P: AsRef<Path>>(&self,
                                                 filename: P,
@@ -474,6 +497,39 @@ impl Ini {
             Ok(r) => r,
         };
         Ini::read_from(&mut reader)
+    }
+
+    /// Load from a utf-16le file
+    pub fn load_from_file_utf16le<P: AsRef<Path>>(filename: P,
+                                                  with_bom: bool)
+                                                  -> Result<Ini, Error> {
+        let mut buffer = Vec::new();
+        File::open(filename.as_ref())
+            .map_err(|e| format!("Unable to open `{:?}`: {}", filename.as_ref(), e))
+            .and_then(|mut reader| {
+                reader.read_to_end(&mut buffer)
+                    .map_err(|e| format!("Unable to read `{:?}`: {:?}", filename.as_ref(), e))
+            })
+            .and_then(|_| {
+                if with_bom {
+                    UTF_16LE.decode(&buffer[2..], DecoderTrap::Strict)
+                        .map_err(|e| format!("Unable to decode `{:?}`: {:?}", filename.as_ref(), e))
+                } else {
+                    UTF_16LE.decode(&buffer, DecoderTrap::Strict)
+                        .map_err(|e| format!("Unable to decode `{:?}`: {:?}", filename.as_ref(), e))
+                }
+            })
+            .map_err(|e| {
+                Error {
+                    line: 0,
+                    col: 0,
+                    msg: e,
+                }
+            })
+            .and_then(|s| {
+                let mut parser = Parser::new(s.chars());
+                parser.parse()
+            })
     }
 }
 

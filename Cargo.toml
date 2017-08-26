@@ -14,3 +14,4 @@ test = true
 
 [dependencies]
 log = "^0.3.5"
+encoding = "0.2"
